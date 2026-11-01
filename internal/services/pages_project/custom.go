@@ -600,3 +600,74 @@ func convertNilToEmptyMapsPreview(plan, state *PagesProjectDeploymentConfigsPrev
 func convertNilToEmptyMapsProduction(plan, state *PagesProjectDeploymentConfigsProductionModel) (*PagesProjectDeploymentConfigsProductionModel, bool) {
 	return plan, convertNilToEmptyMaps(plan, state)
 }
+
+// buildImageVersionsMatch reports whether the plan keeps the build image major version
+// in state for both environments. Changing it lets the API set or clear
+// build_image_auto_upgrade, so that value can only be taken from state when this holds.
+func buildImageVersionsMatch(
+	ctx context.Context,
+	plan customfield.NestedObject[PagesProjectDeploymentConfigsModel],
+	state customfield.NestedObject[PagesProjectDeploymentConfigsModel],
+) bool {
+	if plan.IsUnknown() || state.IsUnknown() {
+		return false
+	}
+
+	planValue, d := plan.Value(ctx)
+	if d.HasError() {
+		return false
+	}
+	stateValue, d := state.Value(ctx)
+	if d.HasError() {
+		return false
+	}
+
+	if planValue == nil || stateValue == nil {
+		return planValue == nil && stateValue == nil
+	}
+
+	preview := func(m *PagesProjectDeploymentConfigsPreviewModel) types.Int64 { return m.BuildImageMajorVersion }
+	production := func(m *PagesProjectDeploymentConfigsProductionModel) types.Int64 { return m.BuildImageMajorVersion }
+
+	return knownInt64sEqual(buildImageVersion(ctx, planValue.Preview, preview), buildImageVersion(ctx, stateValue.Preview, preview)) &&
+		knownInt64sEqual(buildImageVersion(ctx, planValue.Production, production), buildImageVersion(ctx, stateValue.Production, production))
+}
+
+// buildImageVersion returns one environment's build_image_major_version, unknown when it cannot be read.
+func buildImageVersion[T any](ctx context.Context, env customfield.NestedObject[T], version func(*T) types.Int64) types.Int64 {
+	if env.IsUnknown() {
+		return types.Int64Unknown()
+	}
+
+	value, d := env.Value(ctx)
+	if d.HasError() {
+		return types.Int64Unknown()
+	}
+	if value == nil {
+		return types.Int64Null()
+	}
+
+	return version(value)
+}
+
+// knownInt64sEqual is Equal, except that two unknown values do not match.
+func knownInt64sEqual(a, b types.Int64) bool {
+	return !a.IsUnknown() && !b.IsUnknown() && a.Equal(b)
+}
+
+// keepPlannedReadOnlyValues sets canonical_deployment, latest_deployment and
+// build_image_auto_upgrade to their planned values wherever the plan knows them.
+// Deployments change outside Terraform, so the update response can be newer than
+// the plan, and Terraform rejects an apply result that differs from a known plan
+// value. The next refresh records the newer value.
+func keepPlannedReadOnlyValues(planned, data *PagesProjectModel) {
+	if !planned.CanonicalDeployment.IsUnknown() {
+		data.CanonicalDeployment = planned.CanonicalDeployment
+	}
+	if !planned.LatestDeployment.IsUnknown() {
+		data.LatestDeployment = planned.LatestDeployment
+	}
+	if !planned.BuildImageAutoUpgrade.IsUnknown() {
+		data.BuildImageAutoUpgrade = planned.BuildImageAutoUpgrade
+	}
+}

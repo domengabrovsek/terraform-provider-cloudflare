@@ -134,6 +134,7 @@ func (r *PagesProjectResource) Update(ctx context.Context, req resource.UpdateRe
 	}
 
 	planDeploymentConfigs := data.DeploymentConfigs
+	planned := *data
 
 	// Convert nil binding maps to empty maps so the API deletes them.
 	data, diags := PrepareForUpdate(ctx, data, state)
@@ -186,6 +187,8 @@ func (r *PagesProjectResource) Update(ctx context.Context, req resource.UpdateRe
 		return
 	}
 	data.DeploymentConfigs = updatedDeploymentConfigs
+
+	keepPlannedReadOnlyValues(&planned, data)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -347,10 +350,11 @@ func (r *PagesProjectResource) ModifyPlan(ctx context.Context, req resource.Modi
 		return
 	}
 
-	var plan, state *PagesProjectModel
+	var plan, state, config *PagesProjectModel
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 
 	if resp.Diagnostics.HasError() {
 		return
@@ -360,13 +364,13 @@ func (r *PagesProjectResource) ModifyPlan(ctx context.Context, req resource.Modi
 	// These fields are marked as Computed or ComputedOptional in the schema and should
 	// not change during a refresh unless the user explicitly updates the configuration
 
-	// Preserve canonical_deployment if it's unknown in the plan but present in state
-	if plan.CanonicalDeployment.IsUnknown() && !state.CanonicalDeployment.IsNull() {
+	// Preserve canonical_deployment if it's unknown in the plan, null included; Update keeps the planned value
+	if plan.CanonicalDeployment.IsUnknown() {
 		plan.CanonicalDeployment = state.CanonicalDeployment
 	}
 
-	// Preserve latest_deployment if it's unknown in the plan but present in state
-	if plan.LatestDeployment.IsUnknown() && !state.LatestDeployment.IsNull() {
+	// Preserve latest_deployment if it's unknown in the plan, null included
+	if plan.LatestDeployment.IsUnknown() {
 		plan.LatestDeployment = state.LatestDeployment
 	}
 
@@ -376,9 +380,17 @@ func (r *PagesProjectResource) ModifyPlan(ctx context.Context, req resource.Modi
 		plan.DeploymentConfigs = state.DeploymentConfigs
 	}
 
+	// Preserve build_image_auto_upgrade, null included, unless the build image version changes.
+	if plan.BuildImageAutoUpgrade.IsUnknown() && buildImageVersionsMatch(ctx, plan.DeploymentConfigs, state.DeploymentConfigs) {
+		plan.BuildImageAutoUpgrade = state.BuildImageAutoUpgrade
+	}
+
 	// Preserve build_config if it's null/unknown in the plan but present in state.
 	// This prevents drift when user omits build_config (issue #5928).
 	if (plan.BuildConfig.IsUnknown() || plan.BuildConfig.IsNull()) && !state.BuildConfig.IsNull() {
+		plan.BuildConfig = state.BuildConfig
+	} else if plan.BuildConfig.IsUnknown() && config.BuildConfig.IsNull() {
+		// Unset in config and null in state, so the update leaves it null too
 		plan.BuildConfig = state.BuildConfig
 	}
 

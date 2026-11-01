@@ -105,6 +105,14 @@ func testPagesProjectMinimal(resourceID, accountID, projectName string) string {
 	return acctest.LoadTestCase("pagesprojectminimal.tf", resourceID, accountID, projectName)
 }
 
+func testPagesProjectFailOpenFalse(resourceID, accountID, projectName string) string {
+	return acctest.LoadTestCase("pagesprojectfailopenfalse.tf", resourceID, accountID, projectName)
+}
+
+func testPagesProjectPlainTextEnvVar(resourceID, accountID, projectName string) string {
+	return acctest.LoadTestCase("pagesprojectplaintextenvvar.tf", resourceID, accountID, projectName)
+}
+
 func testPagesProjectMinimalWithDeploymentConfigs(resourceID, accountID, projectName string) string {
 	return acctest.LoadTestCase("pagesprojectminimalwithdeploymentconfigs.tf", resourceID, accountID, projectName)
 }
@@ -933,6 +941,69 @@ func TestAccCloudflarePagesProject_NoDriftWithMinimalConfig(t *testing.T) {
 			},
 			{
 				// Re-apply the SAME config - should show no changes (fixes #5928)
+				Config: testPagesProjectMinimal(rnd, accountID, projectName),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectEmptyPlan(),
+					},
+				},
+			},
+		},
+	})
+}
+
+// TestAccCloudflarePagesProject_NoDriftWhenNonDefaultDeploymentConfigsOmitted verifies
+// that dropping deployment_configs from config, while state keeps fail_open = false,
+// plans no changes even though the fail_open schema default rewrites the proposal.
+func TestAccCloudflarePagesProject_NoDriftWhenNonDefaultDeploymentConfigsOmitted(t *testing.T) {
+	testAccPagesProjectNoDriftAfterDeploymentConfigsOmitted(t, testPagesProjectFailOpenFalse,
+		tfjsonpath.New("deployment_configs").AtMapKey("production").AtMapKey("fail_open"), knownvalue.Bool(false))
+}
+
+// TestAccCloudflarePagesProject_NoDriftWhenEnvVarsOmitted verifies the same for
+// env vars that stay on the project, as when they are managed in the dashboard.
+func TestAccCloudflarePagesProject_NoDriftWhenEnvVarsOmitted(t *testing.T) {
+	testAccPagesProjectNoDriftAfterDeploymentConfigsOmitted(t, testPagesProjectPlainTextEnvVar,
+		tfjsonpath.New("deployment_configs").AtMapKey("production").AtMapKey("env_vars").AtMapKey("FOO").AtMapKey("value"), knownvalue.StringExact("bar"))
+}
+
+func testAccPagesProjectNoDriftAfterDeploymentConfigsOmitted(
+	t *testing.T,
+	initialConfig func(resourceID, accountID, projectName string) string,
+	keptPath tfjsonpath.Path,
+	keptValue knownvalue.Check,
+) {
+	rnd := utils.GenerateRandomResourceName()
+	name := "cloudflare_pages_project." + rnd
+	projectName := rnd
+	accountID := os.Getenv("CLOUDFLARE_ACCOUNT_ID")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			acctest.TestAccPreCheck(t)
+		},
+		ProtoV6ProviderFactories: acctest.TestAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckCloudflarePageProjectDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: initialConfig(rnd, accountID, projectName),
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue(name, keptPath, keptValue),
+				},
+			},
+			{
+				// Omitting deployment_configs keeps the stored values, so nothing changes
+				Config: testPagesProjectMinimal(rnd, accountID, projectName),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectEmptyPlan(),
+					},
+				},
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue(name, keptPath, keptValue),
+				},
+			},
+			{
 				Config: testPagesProjectMinimal(rnd, accountID, projectName),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{
